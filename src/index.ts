@@ -100,6 +100,8 @@ async function run() {
 			return retData;
 		}
 
+		console.log("PARTS", parts)
+
 		const igc = new IgApiClient();
 		if (parts[0] === "sessionid") {
 			const sessionid = parts[1];

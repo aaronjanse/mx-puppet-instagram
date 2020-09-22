@@ -12,6 +12,7 @@ export const getSessionCookie = async (igc: IgApiClient, sessRetData: IRetData):
 	}
 	sessRetData.success = true;
 	sessRetData.data = {
+		// username: igc.state.use
 		sessionid: sessionidCookie.value,
 	};
 	return sessRetData;

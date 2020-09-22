@@ -7,6 +7,7 @@ import {
 	IRemoteRoom,
 	IFileEvent,
 	Util,
+	MessageDeduplicator,
 } from "mx-puppet-bridge";
 import { Client } from "./client";
 import * as escapeHtml from "escape-html";
@@ -26,10 +27,12 @@ interface IInstagramPuppets {
 export class Instagram {
 	private puppets: IInstagramPuppets = {};
 	private provisioningAPI: InstagramProvisioningAPI;
+	private messageDeduplicator: MessageDeduplicator;
 	constructor(
 		private puppet: PuppetBridge,
 	) {
 		this.provisioningAPI = new InstagramProvisioningAPI(puppet);
+		this.messageDeduplicator = new MessageDeduplicator();
 	}
 
 	public getSendParams(puppetId: number, msg: any): IReceiveParams {
@@ -37,18 +40,24 @@ export class Instagram {
 		if (msg.eventId) {
 			eventId = msg.eventId;
 		}
+		const room: IRemoteRoom = {
+			roomId: msg.threadId,
+			puppetId,
+			isDirect: msg.isPrivate,
+		}
+		if (!msg.isPrivate) {
+			room.nameVars = {
+				name: msg.threadTitle,
+			}
+		}
 		return {
-			room: {
-				roomId: msg.threadId,
-				puppetId,
-				isDirect: msg.isPrivate,
-			},
+			room,
 			user: {
 				userId: msg.userId,
 				puppetId,
 			},
 			eventId,
-		};
+		}
 	}
 
 	public async createUser(getUser: IRemoteUser): Promise<IRemoteUser | null> {
@@ -74,13 +83,22 @@ export class Instagram {
 		if (this.puppets[puppetId]) {
 			await this.deletePuppet(puppetId);
 		}
+		console.log()
+		console.log("newPuppet with data:", data)
+		console.log()
 		const client = new Client(data.sessionid, data.username, data.password);
 		this.puppets[puppetId] = {
 			client,
 			data,
 		} as IInstagramPuppet;
 		client.on("auth", async (user: any, auth: any) => {
+			console.log()
+			console.log()
+			console.log("AUTH DATA", auth)
+			console.log()
+			console.log()
 			const d = this.puppets[puppetId].data;
+			console.log("ORIG DATA", d)
 			d.username = auth.username;
 			d.name = user.name;
 			d.userId = user.userId;
@@ -91,6 +109,13 @@ export class Instagram {
 		client.on("message", async (msg: any) => {
 			log.verbose("Got message to pass on", msg);
 			const params = this.getSendParams(puppetId, msg);
+			const dedupeKey = `${puppetId};${params.room.roomId}`;
+			console.log("DEDUP DATA:", params)
+			let duplicate = await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, msg.text || "");
+			if (duplicate) {
+				console.log("Discarding duplicate")
+				return
+			}
 			await this.puppet.sendMessage(params, {
 				body: msg.text,
 			});
@@ -167,7 +192,11 @@ export class Instagram {
 			return;
 		}
 		log.verbose("Got message to send on");
+		console.log("p.data", p.data)
+		const dedupeKey = `${room.puppetId};${room.roomId}`;
+		this.messageDeduplicator.lock(dedupeKey, p.data.userId, data.body);
 		const eventId = await p.client.sendMessage(room.roomId, data.body);
+		this.messageDeduplicator.unlock(dedupeKey, p.data.userId, eventId || undefined);
 		if (eventId) {
 			await this.puppet.eventSync.insert(room, data.eventId!, eventId);
 		}
